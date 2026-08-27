@@ -14,12 +14,14 @@ dependencies = [
     "sqlalchemy",
     "alembic",
     "psycopg[binary]",
+    "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-cov",
+    "httpx2",
     "ruff",
     "mypy",
 ]
