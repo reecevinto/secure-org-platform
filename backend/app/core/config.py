@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "Secure Organization Management Platform"
     app_env: str = "development"
     debug: bool = False
+    database_url: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
