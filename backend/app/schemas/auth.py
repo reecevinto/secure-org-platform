@@ -25,3 +25,25 @@ class UserRegistrationResponse(BaseModel):
     first_name: str
     last_name: str
     status: str
+
+
+class UserLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: EmailStr
+    password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class UserLoginResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: EmailStr
+    first_name: str
+    last_name: str
+    status: str
