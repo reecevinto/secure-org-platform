@@ -47,3 +47,13 @@ class UserLoginResponse(BaseModel):
     first_name: str
     last_name: str
     status: str
+
+
+class LogoutRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    session_identifier: str = Field(min_length=1)
+
+
+class LogoutResponse(BaseModel):
+    message: str

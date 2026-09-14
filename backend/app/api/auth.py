@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.schemas.auth import (
+    LogoutRequest,
+    LogoutResponse,
     UserLoginRequest,
     UserLoginResponse,
     UserRegistrationRequest,
@@ -12,6 +14,7 @@ from app.schemas.auth import (
 )
 from app.services.login import InvalidCredentialsError, login_user
 from app.services.registration import DuplicateUserError, register_user
+from app.services.session import revoke_session
 
 router = APIRouter(
     prefix="/api/v1/auth",
@@ -53,3 +56,26 @@ def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         ) from exc
+
+
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    status_code=status.HTTP_200_OK,
+)
+def logout(
+    request: LogoutRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> LogoutResponse:
+    session = revoke_session(
+        db=db,
+        session_identifier=request.session_identifier,
+    )
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found.",
+        )
+
+    return LogoutResponse(message="Logout successful.")
