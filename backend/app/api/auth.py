@@ -3,16 +3,20 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.authentication import get_current_session
 from app.core.database import get_db
+from app.models.session import Session as AuthSession
 from app.schemas.auth import (
     LogoutRequest,
     LogoutResponse,
+    MFAEnrollmentResponse,
     UserLoginRequest,
     UserLoginResponse,
     UserRegistrationRequest,
     UserRegistrationResponse,
 )
 from app.services.login import InvalidCredentialsError, login_user
+from app.services.mfa import enroll_totp_credential
 from app.services.registration import DuplicateUserError, register_user
 from app.services.session import revoke_session
 
@@ -79,3 +83,23 @@ def logout(
         )
 
     return LogoutResponse(message="Logout successful.")
+
+
+@router.post(
+    "/mfa/enroll",
+    response_model=MFAEnrollmentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def enroll_mfa(
+    session: Annotated[AuthSession, Depends(get_current_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> MFAEnrollmentResponse:
+    credential, secret = enroll_totp_credential(
+        db=db,
+        session=session,
+    )
+
+    return MFAEnrollmentResponse(
+        type=credential.type,
+        secret=secret,
+    )

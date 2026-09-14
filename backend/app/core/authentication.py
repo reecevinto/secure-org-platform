@@ -1,12 +1,15 @@
-from fastapi import Header, HTTPException, status
+from typing import Annotated
+
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session as DatabaseSession
 
+from app.core.database import get_db
 from app.models.session import Session
 from app.services.session import get_session_by_identifier
 
 
 def get_current_session(
-    db: DatabaseSession,
+    db: Annotated[DatabaseSession, Depends(get_db)],
     session_identifier: str | None = Header(default=None),
 ) -> Session:
     """Resolve the authenticated session from the request header."""

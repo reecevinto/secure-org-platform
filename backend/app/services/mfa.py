@@ -4,7 +4,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DatabaseSession
 
+from app.core.mfa_security import encrypt_mfa_secret
+from app.core.totp import generate_totp_secret
 from app.models.mfa_credential import MFACredential
+from app.models.session import Session
 
 
 def create_mfa_credential(
@@ -26,6 +29,25 @@ def create_mfa_credential(
     db.refresh(credential)
 
     return credential
+
+
+def enroll_totp_credential(
+    db: DatabaseSession,
+    session: Session,
+) -> tuple[MFACredential, str]:
+    """Create an encrypted, initially disabled TOTP credential."""
+
+    secret = generate_totp_secret()
+    encrypted_secret = encrypt_mfa_secret(secret)
+
+    credential = create_mfa_credential(
+        db=db,
+        user_id=session.user_id,
+        credential_type="totp",
+        secret_reference=encrypted_secret,
+    )
+
+    return credential, secret
 
 
 def get_mfa_credentials_for_user(

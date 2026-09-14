@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = False
     database_url: str = ""
+    mfa_encryption_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

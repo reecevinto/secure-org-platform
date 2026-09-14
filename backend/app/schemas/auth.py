@@ -57,3 +57,10 @@ class LogoutRequest(BaseModel):
 
 class LogoutResponse(BaseModel):
     message: str
+
+
+class MFAEnrollmentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    secret: str
