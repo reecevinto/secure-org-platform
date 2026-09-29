@@ -10,9 +10,18 @@ from app.main import app
 
 
 @pytest.fixture
-def integration_client() -> Generator[tuple[TestClient, Session]]:
+def db() -> Generator[Session]:
     db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
+
+@pytest.fixture
+def integration_client(
+    db: Session,
+) -> Generator[tuple[TestClient, Session]]:
     def override_get_db() -> Generator[Session]:
         yield db
 
@@ -22,7 +31,6 @@ def integration_client() -> Generator[tuple[TestClient, Session]]:
         yield TestClient(app), db
     finally:
         app.dependency_overrides.clear()
-        db.close()
 
 
 @pytest.fixture

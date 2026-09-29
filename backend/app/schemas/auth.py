@@ -64,3 +64,19 @@ class MFAEnrollmentResponse(BaseModel):
 
     type: str
     secret: str
+
+
+class MFAVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    code: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+    )
+
+
+class MFAVerificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str

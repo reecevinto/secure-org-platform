@@ -10,13 +10,19 @@ from app.schemas.auth import (
     LogoutRequest,
     LogoutResponse,
     MFAEnrollmentResponse,
+    MFAVerificationRequest,
+    MFAVerificationResponse,
     UserLoginRequest,
     UserLoginResponse,
     UserRegistrationRequest,
     UserRegistrationResponse,
 )
 from app.services.login import InvalidCredentialsError, login_user
-from app.services.mfa import enroll_totp_credential
+from app.services.mfa import (
+    MFAVerificationError,
+    enroll_totp_credential,
+    verify_totp_credential,
+)
 from app.services.registration import DuplicateUserError, register_user
 from app.services.session import revoke_session
 
@@ -102,4 +108,31 @@ def enroll_mfa(
     return MFAEnrollmentResponse(
         type=credential.type,
         secret=secret,
+    )
+
+
+@router.post(
+    "/mfa/verify",
+    response_model=MFAVerificationResponse,
+    status_code=status.HTTP_200_OK,
+)
+def verify_mfa(
+    request: MFAVerificationRequest,
+    session: Annotated[AuthSession, Depends(get_current_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> MFAVerificationResponse:
+    try:
+        verify_totp_credential(
+            db=db,
+            session=session,
+            code=request.code,
+        )
+    except MFAVerificationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA verification failed.",
+        ) from exc
+
+    return MFAVerificationResponse(
+        message="MFA verification successful.",
     )
