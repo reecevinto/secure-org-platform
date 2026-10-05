@@ -1,8 +1,9 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.security import verify_password
+from app.models.session import Session as AuthSession
 from app.models.user import User
 
 
@@ -42,6 +43,8 @@ def test_login_user_authenticates_against_postgresql(
 
         assert login_response.status_code == 200
 
+        assert login_response.headers.get("session-identifier")
+
         data = login_response.json()
 
         assert data["id"] == str(user.id)
@@ -56,6 +59,11 @@ def test_login_user_authenticates_against_postgresql(
         user = db.scalar(select(User).where(User.email == unique_test_email))
 
         if user is not None:
+            db.execute(
+                delete(AuthSession).where(
+                    AuthSession.user_id == user.id,
+                )
+            )
             db.delete(user)
             db.commit()
 
@@ -94,6 +102,11 @@ def test_login_user_rejects_wrong_password_in_postgresql(
         user = db.scalar(select(User).where(User.email == unique_test_email))
 
         if user is not None:
+            db.execute(
+                delete(AuthSession).where(
+                    AuthSession.user_id == user.id,
+                )
+            )
             db.delete(user)
             db.commit()
 
@@ -134,5 +147,10 @@ def test_login_user_rejects_unknown_email_in_postgresql(
         user = db.scalar(select(User).where(User.email == unique_test_email))
 
         if user is not None:
+            db.execute(
+                delete(AuthSession).where(
+                    AuthSession.user_id == user.id,
+                )
+            )
             db.delete(user)
             db.commit()

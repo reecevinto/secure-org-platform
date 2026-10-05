@@ -1,10 +1,13 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.authentication import get_current_session
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.mfa_challenge import MFAChallengeError, verify_mfa_challenge
 from app.models.session import Session as AuthSession
 from app.schemas.auth import (
     LogoutRequest,
@@ -21,10 +24,11 @@ from app.services.login import InvalidCredentialsError, login_user
 from app.services.mfa import (
     MFAVerificationError,
     enroll_totp_credential,
+    verify_enabled_totp_credential,
     verify_totp_credential,
 )
 from app.services.registration import DuplicateUserError, register_user
-from app.services.session import revoke_session
+from app.services.session import create_session, revoke_session
 
 router = APIRouter(
     prefix="/api/v1/auth",
@@ -53,19 +57,26 @@ def register(
 @router.post(
     "/login",
     response_model=UserLoginResponse,
+    response_model_exclude_none=True,
     status_code=status.HTTP_200_OK,
 )
 def login(
     request: UserLoginRequest,
     db: Annotated[Session, Depends(get_db)],
+    response: Response,
 ) -> UserLoginResponse:
     try:
-        return login_user(db, request)
+        result = login_user(db, request)
     except InvalidCredentialsError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
         ) from exc
+
+    if result.session_identifier is not None:
+        response.headers["session-identifier"] = result.session_identifier
+
+    return result
 
 
 @router.post(
@@ -114,24 +125,83 @@ def enroll_mfa(
 @router.post(
     "/mfa/verify",
     response_model=MFAVerificationResponse,
+    response_model_exclude_none=True,
     status_code=status.HTTP_200_OK,
 )
 def verify_mfa(
     request: MFAVerificationRequest,
-    session: Annotated[AuthSession, Depends(get_current_session)],
     db: Annotated[Session, Depends(get_db)],
+    response: Response,
+    session_identifier: Annotated[
+        str | None,
+        Header(),
+    ] = None,
 ) -> MFAVerificationResponse:
-    try:
-        verify_totp_credential(
+    if session_identifier and request.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA verification failed.",
+        )
+
+    if session_identifier:
+        session = get_current_session(
             db=db,
-            session=session,
+            session_identifier=session_identifier,
+        )
+
+        try:
+            verify_totp_credential(
+                db=db,
+                session=session,
+                code=request.code,
+            )
+        except MFAVerificationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="MFA verification failed.",
+            ) from exc
+
+        return MFAVerificationResponse(
+            message="MFA verification successful.",
+        )
+
+    if not request.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    try:
+        user_id = verify_mfa_challenge(
+            request.challenge,
+        )
+
+        verify_enabled_totp_credential(
+            db=db,
+            user_id=user_id,
             code=request.code,
         )
-    except MFAVerificationError as exc:
+
+        expires_at = datetime.now(UTC) + timedelta(
+            seconds=settings.session_lifetime_seconds,
+        )
+
+        session = create_session(
+            db=db,
+            user_id=user_id,
+            expires_at=expires_at,
+        )
+
+    except (
+        MFAChallengeError,
+        MFAVerificationError,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="MFA verification failed.",
         ) from exc
+
+    response.headers["session-identifier"] = session.session_identifier
 
     return MFAVerificationResponse(
         message="MFA verification successful.",

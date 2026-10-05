@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     database_url: str = ""
     mfa_encryption_key: str = ""
 
+    mfa_challenge_ttl_seconds: int = 300
+    session_lifetime_seconds: int = 3600
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

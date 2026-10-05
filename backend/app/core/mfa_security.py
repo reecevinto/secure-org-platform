@@ -15,6 +15,12 @@ def _get_fernet() -> Fernet:
         raise RuntimeError("MFA encryption key is invalid.") from exc
 
 
+def get_mfa_fernet() -> Fernet:
+    """Return the configured Fernet cipher for MFA-protected data."""
+
+    return _get_fernet()
+
+
 def encrypt_mfa_secret(secret: str) -> str:
     """Encrypt an MFA secret for secure persistence."""
 

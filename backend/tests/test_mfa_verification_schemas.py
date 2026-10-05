@@ -54,3 +54,23 @@ def test_mfa_verification_response_rejects_secret() -> None:
             message="MFA verification successful.",
             secret="should-not-be-returned",
         )
+
+
+def test_mfa_verification_request_accepts_login_challenge() -> None:
+    request = MFAVerificationRequest(
+        code="123456",
+        challenge="encrypted-mfa-challenge",
+    )
+
+    assert request.challenge == "encrypted-mfa-challenge"
+
+
+def test_mfa_verification_request_ignores_client_user_id() -> None:
+    request = MFAVerificationRequest(
+        code="123456",
+        challenge="encrypted-mfa-challenge",
+        user_id="attacker-controlled-user-id",
+    )
+
+    assert request.challenge == "encrypted-mfa-challenge"
+    assert "user_id" not in request.model_dump()

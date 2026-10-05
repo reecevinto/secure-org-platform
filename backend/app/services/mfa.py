@@ -66,8 +66,67 @@ def get_mfa_credentials_for_user(
     )
 
 
+def is_mfa_enabled_for_user(
+    db: DatabaseSession,
+    user_id: UUID,
+) -> bool:
+    """Return whether the user has an enabled TOTP credential."""
+
+    credentials = get_mfa_credentials_for_user(
+        db=db,
+        user_id=user_id,
+    )
+
+    return any(
+        credential.type == "totp" and credential.enabled_at is not None
+        for credential in credentials
+    )
+
+
 class MFAVerificationError(Exception):
     """Raised when MFA verification cannot be completed."""
+
+
+def verify_enabled_totp_credential(
+    db: DatabaseSession,
+    user_id: UUID,
+    code: str,
+) -> MFACredential:
+    """Verify a TOTP code for an already-enabled MFA credential."""
+
+    credentials = get_mfa_credentials_for_user(
+        db=db,
+        user_id=user_id,
+    )
+
+    totp_credentials = [
+        credential
+        for credential in credentials
+        if credential.type == "totp" and credential.enabled_at is not None
+    ]
+
+    if not totp_credentials:
+        raise MFAVerificationError("MFA verification failed.")
+
+    for credential in totp_credentials:
+        try:
+            secret = decrypt_mfa_secret(credential.secret_reference)
+        except ValueError as exc:
+            raise MFAVerificationError(
+                "MFA verification failed.",
+            ) from exc
+
+        if pyotp.TOTP(secret).verify(code):
+            now = datetime.now(UTC)
+
+            credential.last_used_at = now
+
+            db.commit()
+            db.refresh(credential)
+
+            return credential
+
+    raise MFAVerificationError("MFA verification failed.")
 
 
 def verify_totp_credential(

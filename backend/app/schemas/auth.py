@@ -48,6 +48,10 @@ class UserLoginResponse(BaseModel):
     last_name: str
     status: str
 
+    session_identifier: str | None = None
+    mfa_required: bool | None = None
+    mfa_challenge: str | None = None
+
 
 class LogoutRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -73,6 +77,11 @@ class MFAVerificationRequest(BaseModel):
         min_length=6,
         max_length=6,
         pattern=r"^\d{6}$",
+    )
+
+    challenge: str | None = Field(
+        default=None,
+        min_length=1,
     )
 
 
