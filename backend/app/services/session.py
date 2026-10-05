@@ -62,3 +62,47 @@ def revoke_session(
         db.refresh(session)
 
     return session
+
+
+def rotate_session(
+    db: DatabaseSession,
+    session_identifier: str,
+) -> Session | None:
+    """Replace an active session with a newly generated session identifier.
+
+    The existing session is revoked and a replacement session is created
+    atomically for the same user. The replacement preserves the original
+    session expiration and client metadata so rotation does not extend the
+    session lifetime or change its ownership context.
+    """
+
+    session = get_session_by_identifier(
+        db=db,
+        session_identifier=session_identifier,
+    )
+
+    if session is None:
+        return None
+
+    if session.revoked_at is not None:
+        return None
+
+    replacement_session = Session(
+        user_id=session.user_id,
+        session_identifier=generate_session_identifier(),
+        expires_at=session.expires_at,
+        ip_address=session.ip_address,
+        user_agent=session.user_agent,
+    )
+
+    session.revoked_at = datetime.now(UTC)
+
+    try:
+        db.add(replacement_session)
+        db.commit()
+        db.refresh(replacement_session)
+    except Exception:
+        db.rollback()
+        raise
+
+    return replacement_session
