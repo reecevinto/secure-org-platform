@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -35,6 +36,12 @@ def get_current_session(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication session has been revoked.",
+        )
+
+    if session.expires_at <= datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication session has expired.",
         )
 
     return session
