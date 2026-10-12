@@ -1,7 +1,15 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.core.authentication import get_current_session
@@ -15,6 +23,10 @@ from app.schemas.auth import (
     MFAEnrollmentResponse,
     MFAVerificationRequest,
     MFAVerificationResponse,
+    PasswordRecoveryRequest,
+    PasswordRecoveryResponse,
+    PasswordResetRequest,
+    PasswordResetResponse,
     UserLoginRequest,
     UserLoginResponse,
     UserRegistrationRequest,
@@ -26,6 +38,13 @@ from app.services.mfa import (
     enroll_totp_credential,
     verify_enabled_totp_credential,
     verify_totp_credential,
+)
+from app.services.password_recovery import (
+    InvalidRecoveryTokenError,
+    process_password_recovery_request,
+)
+from app.services.password_recovery import (
+    reset_password as reset_password_service,
 )
 from app.services.registration import DuplicateUserError, register_user
 from app.services.session import create_session, revoke_session
@@ -206,3 +225,40 @@ def verify_mfa(
     return MFAVerificationResponse(
         message="MFA verification successful.",
     )
+
+
+@router.post(
+    "/forgot-password",
+    response_model=PasswordRecoveryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def forgot_password(
+    request: PasswordRecoveryRequest,
+    background_tasks: BackgroundTasks,
+) -> PasswordRecoveryResponse:
+    background_tasks.add_task(
+        process_password_recovery_request,
+        request.email,
+    )
+    return PasswordRecoveryResponse()
+
+
+@router.post(
+    "/reset-password",
+    response_model=PasswordResetResponse,
+    status_code=status.HTTP_200_OK,
+)
+def reset_password_endpoint(
+    request: PasswordResetRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordResetResponse:
+    try:
+        return reset_password_service(
+            db=db,
+            request=request,
+        )
+    except InvalidRecoveryTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token.",
+        ) from exc

@@ -89,3 +89,36 @@ class MFAVerificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str
+
+
+class PasswordRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class PasswordRecoveryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = (
+        "If an account matches that email address, "
+        "password recovery instructions will be sent."
+    )
+
+
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    token: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=1, max_length=1024)
+
+
+class PasswordResetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = "Password reset successful."

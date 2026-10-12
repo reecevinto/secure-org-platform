@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.main import app
+from app.schemas.auth import PasswordRecoveryResponse
+from app.services.password_recovery import InvalidRecoveryTokenError
 
 client = TestClient(app)
 
@@ -277,5 +279,168 @@ def test_login_user_requires_password() -> None:
         )
 
         assert response.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_returns_generic_response() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    expected = {
+        "message": (
+            "If an account matches that email address, "
+            "password recovery instructions will be sent."
+        )
+    }
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+            return_value=PasswordRecoveryResponse(),
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "User@Example.COM"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == expected
+        recovery_mock.assert_called_once()
+        recovery_mock.assert_called_once_with("user@example.com")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_rejects_invalid_email() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "not-an-email"},
+            )
+
+        assert response.status_code == 422
+        recovery_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_requires_email() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={},
+            )
+
+        assert response.status_code == 422
+        recovery_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reset_password_returns_success_for_valid_token() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with patch(
+            "app.api.auth.reset_password_service",
+        ) as reset_mock:
+            reset_mock.return_value.message = "Password reset successful."
+
+            response = client.post(
+                "/api/v1/auth/reset-password",
+                json={
+                    "token": "valid-recovery-token",
+                    "new_password": "A-Strong-New-Password-123!",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "message": "Password reset successful.",
+        }
+        reset_mock.assert_called_once()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reset_password_rejects_invalid_token() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with patch(
+            "app.api.auth.reset_password_service",
+            side_effect=InvalidRecoveryTokenError("Internal token detail"),
+        ):
+            response = client.post(
+                "/api/v1/auth/reset-password",
+                json={
+                    "token": "invalid-token",
+                    "new_password": "A-Strong-New-Password-123!",
+                },
+            )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "detail": "Invalid or expired password reset token.",
+        }
+        assert "Internal token detail" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reset_password_rejects_missing_fields() -> None:
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with patch(
+            "app.api.auth.reset_password_service",
+        ) as reset_mock:
+            response = client.post(
+                "/api/v1/auth/reset-password",
+                json={"token": "some-token"},
+            )
+
+        assert response.status_code == 422
+        reset_mock.assert_not_called()
     finally:
         app.dependency_overrides.clear()
