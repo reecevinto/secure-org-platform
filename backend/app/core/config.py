@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,15 @@ class Settings(BaseSettings):
     mfa_challenge_ttl_seconds: int = 300
     session_lifetime_seconds: int = 3600
     password_recovery_token_ttl_seconds: int = 1800
+
+    # Password-recovery abuse protection
+    password_recovery_rate_limit_hmac_key: str = ""
+    password_recovery_source_rate_limit: int = Field(default=10, gt=0)
+    password_recovery_source_window_seconds: int = Field(default=900, gt=0)
+    password_recovery_email_rate_limit: int = Field(default=3, gt=0)
+    password_recovery_email_window_seconds: int = Field(default=3600, gt=0)
+    password_reset_source_rate_limit: int = Field(default=10, gt=0)
+    password_reset_source_window_seconds: int = Field(default=900, gt=0)
 
     smtp_host: str = ""
     smtp_port: int = 587

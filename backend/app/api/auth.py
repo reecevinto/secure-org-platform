@@ -7,6 +7,7 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Request,
     Response,
     status,
 )
@@ -46,6 +47,10 @@ from app.services.password_recovery import (
 from app.services.password_recovery import (
     reset_password as reset_password_service,
 )
+from app.services.password_recovery_rate_limit import (
+    PasswordRecoveryRateLimiter,
+    RateLimitDecision,
+)
 from app.services.registration import DuplicateUserError, register_user
 from app.services.session import create_session, revoke_session
 
@@ -53,6 +58,74 @@ router = APIRouter(
     prefix="/api/v1/auth",
     tags=["authentication"],
 )
+
+
+def get_password_recovery_rate_limiter(
+    db: Annotated[Session, Depends(get_db)],
+) -> PasswordRecoveryRateLimiter:
+    """Provide a rate limiter backed by shared PostgreSQL storage."""
+    try:
+        return PasswordRecoveryRateLimiter(
+            db=db,
+            hmac_key=settings.password_recovery_rate_limit_hmac_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Password recovery is temporarily unavailable.",
+        ) from exc
+
+
+def _check_rate_limit(
+    limiter: PasswordRecoveryRateLimiter,
+    *,
+    namespace: str,
+    identifier: str,
+    limit: int,
+    window_seconds: int,
+) -> RateLimitDecision:
+    """Check a rate-limit bucket and fail closed on storage errors."""
+    try:
+        return limiter.check(
+            namespace=namespace,
+            identifier=identifier,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Password recovery is temporarily unavailable.",
+        ) from exc
+
+
+def _enforce_source_rate_limit(
+    decision: RateLimitDecision,
+) -> None:
+    """Reject requests when their source has exceeded its configured limit."""
+    if decision.allowed:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many requests. Please try again later.",
+        headers={
+            "Retry-After": str(
+                max(1, decision.retry_after_seconds),
+            ),
+        },
+    )
+
+
+def _get_client_address(request: Request) -> str:
+    """Use the ASGI client's address without trusting forwarded headers."""
+    if request.client is None or not request.client.host:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Password recovery is temporarily unavailable.",
+        )
+
+    return request.client.host
 
 
 @router.post(
@@ -235,11 +308,39 @@ def verify_mfa(
 def forgot_password(
     request: PasswordRecoveryRequest,
     background_tasks: BackgroundTasks,
+    client_request: Request,
+    limiter: Annotated[
+        PasswordRecoveryRateLimiter,
+        Depends(get_password_recovery_rate_limiter),
+    ],
 ) -> PasswordRecoveryResponse:
-    background_tasks.add_task(
-        process_password_recovery_request,
-        request.email,
+    client_address = _get_client_address(client_request)
+
+    source_decision = _check_rate_limit(
+        limiter,
+        namespace="password-recovery-source",
+        identifier=client_address,
+        limit=settings.password_recovery_source_rate_limit,
+        window_seconds=settings.password_recovery_source_window_seconds,
     )
+    _enforce_source_rate_limit(source_decision)
+
+    email_decision = _check_rate_limit(
+        limiter,
+        namespace="password-recovery-email",
+        identifier=request.email.strip().lower(),
+        limit=settings.password_recovery_email_rate_limit,
+        window_seconds=settings.password_recovery_email_window_seconds,
+    )
+
+    # Keep the response identical whether the email is unknown or its
+    # recovery-request limit has been reached.
+    if email_decision.allowed:
+        background_tasks.add_task(
+            process_password_recovery_request,
+            request.email,
+        )
+
     return PasswordRecoveryResponse()
 
 
@@ -251,7 +352,23 @@ def forgot_password(
 def reset_password_endpoint(
     request: PasswordResetRequest,
     db: Annotated[Session, Depends(get_db)],
+    client_request: Request,
+    limiter: Annotated[
+        PasswordRecoveryRateLimiter,
+        Depends(get_password_recovery_rate_limiter),
+    ],
 ) -> PasswordResetResponse:
+    client_address = _get_client_address(client_request)
+
+    source_decision = _check_rate_limit(
+        limiter,
+        namespace="password-reset-source",
+        identifier=client_address,
+        limit=settings.password_reset_source_rate_limit,
+        window_seconds=settings.password_reset_source_window_seconds,
+    )
+    _enforce_source_rate_limit(source_decision)
+
     try:
         return reset_password_service(
             db=db,

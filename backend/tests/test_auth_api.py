@@ -1,15 +1,56 @@
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_password_recovery_rate_limiter
 from app.core.database import get_db
 from app.main import app
 from app.schemas.auth import PasswordRecoveryResponse
 from app.services.password_recovery import InvalidRecoveryTokenError
+from app.services.password_recovery_rate_limit import RateLimitDecision
 
 client = TestClient(app)
+
+
+class AllowAllPasswordRecoveryRateLimiter:
+    """Allow password-recovery requests in unrelated API tests."""
+
+    def check(
+        self,
+        *,
+        namespace: str,
+        identifier: str,
+        limit: int,
+        window_seconds: int,
+    ) -> RateLimitDecision:
+        return RateLimitDecision(
+            allowed=True,
+            limit=limit,
+            remaining=limit - 1,
+            retry_after_seconds=60,
+        )
+
+
+@pytest.fixture(autouse=True)
+def override_password_recovery_rate_limiter():
+    """Keep unrelated API tests independent of PostgreSQL rate-limit storage."""
+
+    limiter = AllowAllPasswordRecoveryRateLimiter()
+
+    def override_limiter():
+        return limiter
+
+    app.dependency_overrides[get_password_recovery_rate_limiter] = override_limiter
+
+    yield
+
+    app.dependency_overrides.pop(
+        get_password_recovery_rate_limiter,
+        None,
+    )
 
 
 def create_mock_db() -> MagicMock:
@@ -442,5 +483,245 @@ def test_reset_password_rejects_missing_fields() -> None:
 
         assert response.status_code == 422
         reset_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_returns_429_when_source_limit_is_exceeded() -> None:
+    from app.api.auth import get_password_recovery_rate_limiter
+    from app.services.password_recovery_rate_limit import RateLimitDecision
+
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    class DenySourceLimiter:
+        def check(
+            self,
+            *,
+            namespace: str,
+            identifier: str,
+            limit: int,
+            window_seconds: int,
+        ) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=False,
+                limit=limit,
+                remaining=0,
+                retry_after_seconds=120,
+            )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_password_recovery_rate_limiter] = lambda: (
+        DenySourceLimiter()
+    )
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "user@example.com"},
+            )
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "120"
+        recovery_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_keeps_generic_response_when_email_limit_is_exceeded() -> None:
+    from app.api.auth import get_password_recovery_rate_limiter
+    from app.services.password_recovery_rate_limit import RateLimitDecision
+
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    class DenyEmailLimiter:
+        def check(
+            self,
+            *,
+            namespace: str,
+            identifier: str,
+            limit: int,
+            window_seconds: int,
+        ) -> RateLimitDecision:
+            if namespace == "password-recovery-email":
+                return RateLimitDecision(
+                    allowed=False,
+                    limit=limit,
+                    remaining=0,
+                    retry_after_seconds=300,
+                )
+
+            return RateLimitDecision(
+                allowed=True,
+                limit=limit,
+                remaining=limit - 1,
+                retry_after_seconds=60,
+            )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_password_recovery_rate_limiter] = lambda: (
+        DenyEmailLimiter()
+    )
+
+    expected = {
+        "message": (
+            "If an account matches that email address, "
+            "password recovery instructions will be sent."
+        )
+    }
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "user@example.com"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == expected
+        recovery_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reset_password_returns_429_when_source_limit_is_exceeded() -> None:
+    from app.api.auth import get_password_recovery_rate_limiter
+    from app.services.password_recovery_rate_limit import RateLimitDecision
+
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    class DenyResetLimiter:
+        def check(
+            self,
+            *,
+            namespace: str,
+            identifier: str,
+            limit: int,
+            window_seconds: int,
+        ) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=False,
+                limit=limit,
+                remaining=0,
+                retry_after_seconds=90,
+            )
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_password_recovery_rate_limiter] = lambda: (
+        DenyResetLimiter()
+    )
+
+    try:
+        with patch(
+            "app.api.auth.reset_password_service",
+        ) as reset_mock:
+            response = client.post(
+                "/api/v1/auth/reset-password",
+                json={
+                    "token": "valid-recovery-token",
+                    "new_password": "A-Strong-New-Password-123!",
+                },
+            )
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "90"
+        reset_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_fails_closed_when_limiter_storage_fails() -> None:
+    from app.api.auth import get_password_recovery_rate_limiter
+
+    db = create_mock_db()
+
+    def override_get_db():
+        yield db
+
+    class FailingLimiter:
+        def check(
+            self,
+            *,
+            namespace: str,
+            identifier: str,
+            limit: int,
+            window_seconds: int,
+        ):
+            raise RuntimeError("database unavailable")
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_password_recovery_rate_limiter] = lambda: (
+        FailingLimiter()
+    )
+
+    try:
+        with patch(
+            "app.api.auth.process_password_recovery_request",
+        ) as recovery_mock:
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "user@example.com"},
+            )
+
+        assert response.status_code == 503
+        assert "database unavailable" not in response.text
+        recovery_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_forgot_password_does_not_trust_forwarded_for_header() -> None:
+    captured_checks: list[dict[str, object]] = []
+
+    class CapturingLimiter:
+        def check(
+            self,
+            *,
+            namespace: str,
+            identifier: str,
+            limit: int,
+            window_seconds: int,
+        ) -> RateLimitDecision:
+            captured_checks.append(
+                {
+                    "namespace": namespace,
+                    "identifier": identifier,
+                }
+            )
+            return RateLimitDecision(
+                allowed=True,
+                limit=limit,
+                remaining=limit - 1,
+                retry_after_seconds=60,
+            )
+
+    app.dependency_overrides[get_password_recovery_rate_limiter] = lambda: (
+        CapturingLimiter()
+    )
+
+    try:
+        with patch("app.api.auth.process_password_recovery_request"):
+            response = client.post(
+                "/api/v1/auth/forgot-password",
+                json={"email": "user@example.com"},
+                headers={"X-Forwarded-For": "203.0.113.99"},
+            )
+
+        assert response.status_code == 200
+        assert captured_checks[0]["namespace"] == "password-recovery-source"
+        assert captured_checks[0]["identifier"] == "testclient"
     finally:
         app.dependency_overrides.clear()
